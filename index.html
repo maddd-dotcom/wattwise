@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WattWise</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#14365d">
+<link rel="icon" href="icon-192.png">
+<style>
+  :root{--navy:#14365d;--teal:#1f8a8a;--bg:#f2f6f9;--card:#fff;--text:#1b2a38;--muted:#667788;--bad:#c0392b;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  header{background:var(--navy);color:#fff;padding:16px;display:flex;justify-content:space-between;align-items:center}
+  header h1{font-size:20px;margin:0}
+  #status{font-size:12px;opacity:.9}
+  main{max-width:720px;margin:0 auto;padding:16px;display:grid;gap:14px}
+  .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  .big{font-size:56px;font-weight:700;color:var(--navy);line-height:1}
+  .big small{font-size:22px;font-weight:500;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .mini{text-align:center}
+  .mini b{display:block;font-size:20px}
+  .mini span{font-size:12px;color:var(--muted)}
+  .cost{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .cost b{font-size:20px;color:var(--teal)}
+  label{font-size:13px;color:var(--muted);display:block;margin-bottom:4px}
+  input{width:100%;padding:10px;border:1px solid #c5d2dc;border-radius:8px;font-size:16px}
+  canvas{width:100%;height:200px;display:block}
+  h2{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  .alert{background:#fdecea;color:var(--bad);font-weight:600;display:none}
+  .note{font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>WattWise</h1>
+  <div id="status">menghubungkan...</div>
+</header>
+
+<main>
+  <div class="card alert" id="alert">Peringatan: pemakaian melewati batas!</div>
+
+  <div class="card">
+    <h2>Daya saat ini</h2>
+    <div class="big"><span id="watt">0</span> <small>W</small></div>
+  </div>
+
+  <div class="grid">
+    <div class="card mini"><b id="volt">0</b><span>Tegangan (V)</span></div>
+    <div class="card mini"><b id="amp">0</b><span>Arus (A)</span></div>
+    <div class="card mini"><b id="kwh">0</b><span>Energi (kWh)</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Grafik daya (60 pembacaan terakhir)</h2>
+    <canvas id="chart"></canvas>
+  </div>
+
+  <div class="card">
+    <h2>Estimasi biaya listrik</h2>
+    <div class="cost">
+      <div><span class="note">Per hari</span><br><b id="costDay">Rp 0</b></div>
+      <div><span class="note">Per bulan</span><br><b id="costMonth">Rp 0</b></div>
+    </div>
+    <p class="note">Dihitung dari rata-rata daya yang terbaca selama halaman dibuka, dianggap menyala terus 24 jam.</p>
+  </div>
+
+  <div class="card">
+    <h2>Pengaturan</h2>
+    <label for="tarif">Tarif listrik (Rp per kWh)</label>
+    <input id="tarif" type="number" value="1444.70" step="0.01">
+    <br><br>
+    <label for="limit">Batas peringatan daya (Watt)</label>
+    <input id="limit" type="number" value="900">
+  </div>
+</main>
+
+<script>
+// ============ PENGATURAN (ubah di sini) ============
+// Isi dengan alamat Realtime Database kalian, contoh:
+// "https://wattwise-xxxxx-default-rtdb.asia-southeast1.firebasedatabase.app"
+// Biarkan kosong untuk mode DEMO (data acak, untuk presentasi/tes tampilan).
+const DB_URL = "";
+const PATH = "/wattwise/now.json";   // ESP32 menulis ke /wattwise/now
+const INTERVAL_MS = 3000;
+// ====================================================
+
+const $ = id => document.getElementById(id);
+const history = [];
+let sum = 0, count = 0;
+
+function rupiah(n){ return "Rp " + Math.round(n).toLocaleString("id-ID"); }
+
+async function readData(){
+  if(!DB_URL){                      // mode demo
+    const w = 300 + Math.random()*400 + (Math.random()<0.1 ? 400 : 0);
+    const v = 218 + Math.random()*5;
+    return {watt:w, volt:v, amp:w/v, kwh:(count*w*INTERVAL_MS/3.6e9)+12.3};
+  }
+  const r = await fetch(DB_URL + PATH, {cache:"no-store"});
+  if(!r.ok) throw new Error("HTTP " + r.status);
+  return await r.json();            // {watt, volt, amp, kwh}
+}
+
+function update(d){
+  const watt = Number(d.watt)||0;
+  $("watt").textContent = watt.toFixed(0);
+  $("volt").textContent = (Number(d.volt)||0).toFixed(1);
+  $("amp").textContent  = (Number(d.amp)||0).toFixed(2);
+  $("kwh").textContent  = (Number(d.kwh)||0).toFixed(2);
+
+  history.push(watt); if(history.length>60) history.shift();
+  sum += watt; count++;
+
+  const tarif = Number($("tarif").value)||0;
+  const avgKw = (sum/count)/1000;
+  $("costDay").textContent   = rupiah(avgKw*24*tarif);
+  $("costMonth").textContent = rupiah(avgKw*24*30*tarif);
+
+  $("alert").style.display = watt > Number($("limit").value) ? "block" : "none";
+  drawChart();
+}
+
+function drawChart(){
+  const c = $("chart"), dpr = window.devicePixelRatio||1;
+  const W = c.clientWidth, H = c.clientHeight;
+  c.width = W*dpr; c.height = H*dpr;
+  const g = c.getContext("2d"); g.scale(dpr,dpr);
+  g.clearRect(0,0,W,H);
+  if(history.length<2) return;
+  const max = Math.max(100, ...history)*1.15, pad = 28;
+  g.strokeStyle="#dde6ec"; g.fillStyle="#667788"; g.font="11px system-ui"; g.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const y = pad/2 + (H-pad)*(i/4);
+    g.beginPath(); g.moveTo(pad+10,y); g.lineTo(W,y); g.stroke();
+    g.fillText(Math.round(max*(1-i/4)), 0, y+4);
+  }
+  g.strokeStyle="#1f8a8a"; g.lineWidth=2.5; g.beginPath();
+  history.forEach((v,i)=>{
+    const x = pad+10 + (W-pad-10)*(i/59);
+    const y = pad/2 + (H-pad)*(1 - v/max);
+    i ? g.lineTo(x,y) : g.moveTo(x,y);
+  });
+  g.stroke();
+}
+
+async function tick(){
+  try{
+    update(await readData());
+    $("status").textContent = DB_URL ? "terhubung" : "mode demo";
+  }catch(e){
+    $("status").textContent = "gagal terhubung";
+  }
+}
+tick(); setInterval(tick, INTERVAL_MS);
+window.addEventListener("resize", drawChart);
+
+if("serviceWorker" in navigator){
+  navigator.serviceWorker.register("sw.js").catch(()=>{});
+}
+</script>
+</body>
+</html>
